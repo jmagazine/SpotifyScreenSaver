@@ -9,11 +9,21 @@ using static System.Formats.Asn1.AsnWriter;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
+using System.Net.Http.Headers;
+using System.Net.Http;
+using System.Net.Http.Json;
+using System.Net.Mail;
+using static System.Net.WebRequestMethods;
+using System.Security.Cryptography;
+using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
 
 public class SpotifyManager {
-    public static string ClientId { get; set; } = string.Empty;
 
-    public static string ClientSecret { get; set; } = string.Empty;
+    private string AccessToken;
+
+
+
 
     /// <summary>
     /// This returns a random string of the specified <paramref name="length"/>
@@ -41,14 +51,14 @@ public class SpotifyManager {
     /// </summary>
     /// <param name="plain">The plain string to encode.</param>
     /// <returns></returns>
-    public async Task<string> SHA256HashAsync(string plain)
+    public async Task<byte[]> SHA256HashAsync(string plain)
     {
         byte[] data = Encoding.UTF8.GetBytes(plain);
 
         using (SHA256 sha256 = SHA256.Create())
         {
             byte[] hashBytes = await Task.Run(() => sha256.ComputeHash(data));
-            return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+            return hashBytes;
         }
     }
 
@@ -106,21 +116,17 @@ public class SpotifyManager {
         return listener;
     }
 
-    public async Task<string> GetCode()
+    public async Task<string> GetCode(HttpListener listener)
     {
 
+        string? code = null;
 
-
-        HttpListener listener = StartHttpListener(8080);
-
-        string code = null;
-
+        // Run until code is received
         while (string.IsNullOrEmpty(code))
-        {
+        { 
             var context = await listener.GetContextAsync();
             var request = context.Request;
             var response = context.Response;
-
             // Process the incoming request
             if (request.HttpMethod == "GET" && request.Url.AbsolutePath == "/callback")
             {
@@ -128,6 +134,7 @@ public class SpotifyManager {
                 code = request.QueryString["code"];
                 if (string.IsNullOrEmpty(code))
                 {
+                    Debug.WriteLine($"Bad request: {request.RawUrl}");
                     // Respond with an error if code is empty
                     response.StatusCode = 400;
                     response.Close();
@@ -135,6 +142,9 @@ public class SpotifyManager {
                 }
 
                 // Code is not null here
+                response.StatusCode = 200;
+                response.Close();
+                Debug.WriteLine($"Code: {code}");
                 return code;
             }
             else
@@ -157,71 +167,96 @@ public class SpotifyManager {
             Exception NullClientIdError = new Exception("Client Id is empty.");
             throw NullClientIdError;
         }
-
-        ClientId = clientId;
-        int port = 8080;
-
-        Debug.WriteLine(ClientId);
-       
+        // Variable initalization
+        int PORT = 8080;
+        string SPOTIFY_API_PATH = "https://accounts.spotify.com";
+               
         // Initialize variables for payload
-        string redirectUri = $"https://localhost:{port}";
+        string redirectUri = $"http://localhost:{PORT}/callback";
         string scope = "user-read-private user-read-email";
         string codeVerifier = GenerateRandomString();
-        string? hash = SHA256HashAsync(codeVerifier).Result;
-        string codeChallenge = Base64Encode(Encoding.UTF8.GetBytes(hash));
+        byte[] hash = SHA256HashAsync(codeVerifier).Result;
+        string codeChallenge = Base64Encode(hash);
 
 
-        using (HttpClient client = new HttpClient())
+        
+        try
         {
-            try
+            HttpClient spotifyClient = new HttpClient();
+            spotifyClient.BaseAddress = new Uri(SPOTIFY_API_PATH);
+
+            // Initialize server
+            HttpListener listener = StartHttpListener(PORT);
+                
+            // Develop payload for GET request
+            Dictionary<string, string> codeQueryParams = new Dictionary<string, string>();
+            codeQueryParams.TryAdd("client_id", clientId);
+            codeQueryParams.TryAdd("response_type", "code");
+            codeQueryParams.TryAdd("redirect_uri", redirectUri);
+            codeQueryParams.TryAdd("scope", scope);
+            codeQueryParams.TryAdd("code_challenge_method", "S256");
+            codeQueryParams.TryAdd("code_challenge", codeChallenge);
+
+            // Create full URL
+            string codeQueryUrl = $"{SPOTIFY_API_PATH}/authorize?{QueryParamsToQueryString(codeQueryParams)}";
+
+            // Open in default browser
+            Process.Start(new ProcessStartInfo(codeQueryUrl)
             {
-                // Develop payload
-                Dictionary<string, string> codeQueryParams = new Dictionary<string, string>();
-                codeQueryParams.TryAdd("client_id", ClientId);
-                codeQueryParams.TryAdd("response_type", "code");
-                codeQueryParams.TryAdd("redirect_uri", redirectUri);
-                codeQueryParams.TryAdd("scope", scope);
-                codeQueryParams.TryAdd("code_challenge_method", "S256");
-                codeQueryParams.TryAdd("code_challenge", codeChallenge);
+                UseShellExecute = true
+            }); ;
 
-                // Create full URL
-                string codeQueryUrl = "https://accounts.spotify.com/authorize/?" + QueryParamsToQueryString(codeQueryParams);
-                Debug.WriteLine(codeQueryUrl);
-
-                Process.Start(new ProcessStartInfo(codeQueryUrl)
-                {
-                    UseShellExecute = true
-                });
-
-                string code = null;
-                while (string.IsNullOrEmpty(code)) {
-                    code = GetCode().Result;
-                }
-
-                Dictionary<string, string> accessTokenQueryParams = new Dictionary<string, string>();
-                accessTokenQueryParams.TryAdd("client_id", clientId);
-                accessTokenQueryParams.TryAdd("grant_type", "authorization_code");
-                accessTokenQueryParams.TryAdd("code", code);
-                accessTokenQueryParams.TryAdd("redirect_uri", redirectUri);
-                accessTokenQueryParams.TryAdd("code_verifier", codeVerifier);
-
-
-                var content = new FormUrlEncodedContent(accessTokenQueryParams);
-
-
-                HttpResponseMessage message = client.PostAsync(redirectUri, content).Result;
-                HttpContent response = message.Content;
-                Debug.WriteLine(response.ToString());
-
-
-
+            // Wait to receive code
+            string? authCode = null;
+            while (string.IsNullOrEmpty(authCode)) {
+                Task<string> authCodeTask = GetCode(listener);
+                authCode = authCodeTask.Result;
             }
 
-            catch (Exception)
+            // Create payload for getting the access token
+               
+            Dictionary<string, string> content = new Dictionary<string, string>
             {
-                Debug.WriteLine("Failed to initialize network request, quitting...");
-                return;
+                { "grant_type", "authorization_code" },
+                { "client_id" , clientId },
+                {"code" , authCode},
+                {"redirect_uri" , redirectUri},
+                { "code_verifier" , codeVerifier }
+            };
+
+            var parameters = new FormUrlEncodedContent(content);
+   
+
+            // jsonContent.Headers.Add("Content-Type", "application/x-www-form-urlencoded");
+
+            HttpResponseMessage response = spotifyClient.PostAsync("api/token/", parameters).Result;
+            string jsonString =  response.Content.ReadAsStringAsync().Result;
+            string[] kvs = jsonString
+                .Replace("{", "")
+                .Replace("}", "")
+                .Replace("\"", "")
+                .Split(',');
+            Dictionary<string, string> responseDict = new Dictionary<string, string>();
+            foreach(string kv in kvs)
+            {
+                string[] kv_pair = kv.Split(":");
+                responseDict[kv_pair[0]] = kv_pair[1];
             }
+
+            Debug.WriteLine(responseDict["access_token"]);
+            this.AccessToken = responseDict["access_token"];
+            Debug.WriteLine("Complete!");
+
+
+
+        }
+
+        catch (Exception e)
+        {
+            Debug.WriteLine(e);
+            Debug.WriteLine("Failed to initialize Spotify Manager, quitting...");
+            
+            return;
         }
     }
 }
