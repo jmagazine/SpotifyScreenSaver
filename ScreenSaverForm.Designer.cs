@@ -1,6 +1,6 @@
 ﻿namespace SpotifyScreenSaver
 {
-    partial class Form1
+    partial class ScreenSaverForm
     {
         /// <summary>
         ///  Required designer variable.
@@ -28,12 +28,26 @@
         /// </summary>
         private void InitializeComponent()
         {
-            this.components = new System.ComponentModel.Container();
-            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(800, 450);
-            this.Text = "Form1";
+            SuspendLayout();
+            // 
+            // ScreenSaverForm
+            // 
+            AutoScaleDimensions = new SizeF(7F, 15F);
+            AutoScaleMode = AutoScaleMode.Font;
+            BackColor = SystemColors.ActiveBorder;
+            BackgroundImageLayout = ImageLayout.Center;
+            ClientSize = new Size(800, 450);
+            FormBorderStyle = FormBorderStyle.None;
+            Name = "ScreenSaverForm";
+            StartPosition = FormStartPosition.Manual;
+            Text = "SpotifyScreenSaver";
+            Load += ScreenSaverForm_Load;
+            MouseClick += ScreenSaverForm_MouseClick;
+            MouseMove += ScreenSaverForm_MouseMove;
+            ResumeLayout(false);
         }
 
         #endregion
+
     }
 }

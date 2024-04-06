@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "SpotifyScreenSaver": {
+      "commandName": "Project",
+      "commandLineArgs": "/s"
+    }
+  }
+}
