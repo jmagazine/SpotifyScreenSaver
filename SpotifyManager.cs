@@ -1,26 +1,112 @@
-﻿using System;
+﻿using SpotifyAPI.Web;
 using System.Diagnostics;
-using System.Security.Cryptography;
-using System.Security.Policy;
-using System.Text;
-using System.Configuration;
-using System.Collections.Specialized;
-using static System.Formats.Asn1.AsnWriter;
 using System.Net;
-using System.Net.Sockets;
-using System.Text.Json;
-using System.Net.Http.Headers;
-using System.Net.Http;
-using System.Net.Http.Json;
-using System.Net.Mail;
-using static System.Net.WebRequestMethods;
 using System.Security.Cryptography;
-using System.Text.Json.Serialization;
+using System.Text;
 using System.Text.Json.Nodes;
+public class SpotifyManager
+{
 
-public class SpotifyManager {
+    // ######
+    // FIELDS
+    // ######
 
-    private string AccessToken;
+    // Client id for API application
+    private string ClientId = "";
+
+    // Access Token to use API
+    private string AccessToken = "";
+
+    // Refresh Token
+    private string RefreshToken = "";
+
+    // HttpListener to act as server
+    private HttpListener Server = new HttpListener();
+
+    // SpotifyClient for making API calls
+    private SpotifyClient Client;
+
+    // Authenticator
+    private PKCEAuthenticator Authenticator;
+
+    // Timer to refresh the token after 1 hour
+    private System.Timers.Timer refreshTokenTimer = new System.Timers.Timer();
+
+    // Check to determine if the SpotifyManager was fully initialized
+    private bool clientDidStart = false;
+
+    // User Id of connected Spotify Account.
+    private JsonNode currentUserProfile;
+
+    // Exception for when clientDidStart == false;
+    private Exception ClientNotInitializedException = new Exception("Cannot perform operation: SpotifyClient has not been initialized.");
+
+    // ######
+    // METHODS
+    // ######
+
+    /// <summary>
+    /// Convert HttpContent to a Dictionary with string key/value pairs.  
+    /// </summary>
+    /// <param name="content">HttpContent object to convert.</param>
+    /// <returns></returns>
+    private Dictionary<string, string> HttpContentToDictionary(HttpContent content)
+    {
+
+        string contentString = content.ReadAsStringAsync().Result;
+        string[] kvs = contentString
+                .Replace("{", "")
+                .Replace("}", "")
+                .Replace("\"", "")
+                .Split(',');
+        Dictionary<string, string> responseDict = new Dictionary<string, string>();
+        foreach (string kv in kvs)
+        {
+            string[] kv_pair = kv.Split(":");
+            responseDict[kv_pair[0]] = kv_pair[1];
+        }
+        return responseDict;
+    }
+
+    /// <summary>
+    /// Refreshes the current access token, updating that as well as the refresh token.
+    /// </summary>
+    /// 
+    //private void RefreshAccessToken()
+    //{
+
+
+    //    // Checks that the spotify client has been fully initialized
+    //    if (!clientDidStart)
+    //    {
+    //        Exception e = new Exception("The HTTPClient did not start. Quitting with error...");
+    //        throw e;
+    //    }
+    //    // Build the payload
+    //    Dictionary<string, string> content = new Dictionary<string, string>{
+    //        {"grant_type", "refresh_token"},
+    //        { "refresh_token", this.RefreshToken},
+    //        {"client_id",this.ClientId },
+    //    };
+
+    //    // Encode using x-www-form-urlencoded
+    //    FormUrlEncodedContent payload = new FormUrlEncodedContent(content);
+
+    //    // Get response
+    //    HttpResponseMessage response = AuthClient.PostAsync("api/token", payload).Result;
+
+    //    // Ensure successful Status Code
+    //    if (!response.IsSuccessStatusCode)
+    //    {
+    //        Debug.WriteLine($"Error {response.StatusCode}");
+    //        return;
+    //    }
+
+    //    // Set access token and refresh token
+    //    Dictionary<string, string> responseDict = HttpContentToDictionary(response.Content);
+    //    this.AccessToken = responseDict["access_token"];
+    //    this.RefreshToken = responseDict["refresh_token"];
+    //}
 
 
 
@@ -29,8 +115,8 @@ public class SpotifyManager {
     /// This returns a random string of the specified <paramref name="length"/>
     /// </summary>
     /// <param name="length">The desired length of the string.</param>
-    /// <returns></returns>
-    public string GenerateRandomString(int length = 64)
+    /// <returns>A randomly generated string.</returns>
+    private string GenerateRandomString(int length = 64)
     {
         Random random = new Random();
 
@@ -50,14 +136,14 @@ public class SpotifyManager {
     /// This returns a SHA256 hashing of a given string.
     /// </summary>
     /// <param name="plain">The plain string to encode.</param>
-    /// <returns></returns>
-    public async Task<byte[]> SHA256HashAsync(string plain)
+    /// <returns>A byte array representing the SHA256 hashing of <paramref name="plain"/>.</returns>
+    private byte[] SHA256HashAsync(string plain)
     {
         byte[] data = Encoding.UTF8.GetBytes(plain);
 
         using (SHA256 sha256 = SHA256.Create())
         {
-            byte[] hashBytes = await Task.Run(() => sha256.ComputeHash(data));
+            byte[] hashBytes = Task.Run(() => sha256.ComputeHash(data)).Result;
             return hashBytes;
         }
     }
@@ -66,8 +152,8 @@ public class SpotifyManager {
     /// Returns the string representation of a base64 encoding.
     /// </summary>
     /// <param name="input">The byte array to encode.</param>
-    /// <returns></returns>
-    public string Base64Encode(byte[] input)
+    /// <returns>A string representing the base64Encoding <paramref name="input"/>.</returns>
+    private string Base64Encode(byte[] input)
     {
         string base64String = Convert.ToBase64String(input)
             .Replace("=", "")
@@ -78,28 +164,40 @@ public class SpotifyManager {
     }
 
 
-    public string QueryParamsToQueryString(Dictionary<string, string> response)
+    /// <summary>
+    /// Converts a dictionary of query parameters to a query string.
+    /// </summary>
+    /// <param name="parameters">The dictionary representing the parameters.</param>
+    /// <returns>A string of query parameters.</returns>
+    private string QueryParamsToQueryString(Dictionary<string, string> parameters)
     {
         // Initialize string builder
         StringBuilder sb = new StringBuilder();
 
         // Iterate through keys
-        for (int i = 0; i < response.Keys.Count(); i++)
+        for (int i = 0; i < parameters.Keys.Count(); i++)
         {
             // concatenate key and value with "="
-            string key = response.Keys.ToArray()[i];
-            string value = response[key];
+            string key = parameters.Keys.ToArray()[i];
+            string value = parameters[key];
             sb.Append(key + "=" + value);
-            if (i < response.Count - 1) {
+            if (i < parameters.Count - 1)
+            {
                 sb.AppendLine("&");
             }
         }
 
         // String representation
-        return sb.ToString() ;
+        return sb.ToString();
     }
 
-    public HttpListener StartHttpListener(int port) {
+    /// <summary>
+    /// This starts an HTTPListener on the specified port. This is used for the PKCE Authorization code flow.
+    /// </summary>
+    /// <param name="port">The port to open.</param>
+    /// <returns></returns>
+    private HttpListener StartHttpListener(int port)
+    {
 
         string baseUrl = $"http://localhost:{port}/";
 
@@ -112,19 +210,24 @@ public class SpotifyManager {
         // Start the listener
         listener.Start();
 
-        Debug.WriteLine("Listening for requests on " + baseUrl);
+        Debug.WriteLine($"Listening for requests on  port {port}.");
         return listener;
     }
 
-    public async Task<string> GetCode(HttpListener listener)
+    /// <summary>
+    /// Gets the code to supply when requesting an access token.
+    /// </summary>
+    /// <param name="listener">HttpListener that the code will be redirected to.</param>
+    /// <returns></returns>
+    private string GetCode()
     {
 
         string? code = null;
 
         // Run until code is received
         while (string.IsNullOrEmpty(code))
-        { 
-            var context = await listener.GetContextAsync();
+        {
+            var context = Server.GetContextAsync().Result;
             var request = context.Request;
             var response = context.Response;
             // Process the incoming request
@@ -144,12 +247,11 @@ public class SpotifyManager {
                 // Code is not null here
                 response.StatusCode = 200;
                 response.Close();
-                Debug.WriteLine($"Code: {code}");
                 return code;
             }
             else
             {
-                // Respond with a 404 Not Found for unknown routes
+                // Respond with a 404
                 response.StatusCode = 404;
                 response.Close();
             }
@@ -158,105 +260,156 @@ public class SpotifyManager {
         return code;
     }
 
-
+    /// <summary>
+    /// Instantiates a SpotifyManager, which handles Spotify API requests on behalf of the client.
+    /// </summary>
+    /// <param name="clientId">The client id of the Spotify application used when making API requests.</param>
     public SpotifyManager(string clientId)
     {
-        Console.WriteLine($"Client id: {clientId}");
         // Fail if client id is null
-        if (string.IsNullOrEmpty(clientId)) {
+        if (string.IsNullOrEmpty(clientId))
+        {
             Exception NullClientIdError = new Exception("Client Id is empty.");
             throw NullClientIdError;
         }
         // Variable initalization
-        int PORT = 8080;
-        string SPOTIFY_API_PATH = "https://accounts.spotify.com";
-               
-        // Initialize variables for payload
-        string redirectUri = $"http://localhost:{PORT}/callback";
-        string scope = "user-read-private user-read-email";
-        string codeVerifier = GenerateRandomString();
-        byte[] hash = SHA256HashAsync(codeVerifier).Result;
-        string codeChallenge = Base64Encode(hash);
+        string REDIRECT_URI_PATH = "http://localhost:8080/";
+        string SPOTIFY_AUTH_PATH = "https://accounts.spotify.com";
+        string SPOTIFY_API_PATH = "https://api.spotify.com";
 
-
-        
         try
         {
-            HttpClient spotifyClient = new HttpClient();
-            spotifyClient.BaseAddress = new Uri(SPOTIFY_API_PATH);
-
-            // Initialize server
-            HttpListener listener = StartHttpListener(PORT);
-                
-            // Develop payload for GET request
-            Dictionary<string, string> codeQueryParams = new Dictionary<string, string>();
-            codeQueryParams.TryAdd("client_id", clientId);
-            codeQueryParams.TryAdd("response_type", "code");
-            codeQueryParams.TryAdd("redirect_uri", redirectUri);
-            codeQueryParams.TryAdd("scope", scope);
-            codeQueryParams.TryAdd("code_challenge_method", "S256");
-            codeQueryParams.TryAdd("code_challenge", codeChallenge);
-
-            // Create full URL
-            string codeQueryUrl = $"{SPOTIFY_API_PATH}/authorize?{QueryParamsToQueryString(codeQueryParams)}";
-
+            // Initialize listener
+            Server.Prefixes.Add(REDIRECT_URI_PATH.ToString());
+            Server.Start();
+            // Create PKCE login request
+            var (verifier, challenge) = PKCEUtil.GenerateCodes();
+            LoginRequest loginRequest = new LoginRequest(
+                      new Uri(REDIRECT_URI_PATH + "callback"), clientId,
+                      LoginRequest.ResponseType.Code
+                    )
+            {
+                CodeChallengeMethod = "S256",
+                CodeChallenge = challenge,
+                Scope = new[] { Scopes.PlaylistReadPrivate, Scopes.PlaylistReadCollaborative,
+                Scopes.UserLibraryRead, Scopes.UserReadPrivate , Scopes.UserTopRead}
+            };
+            // Get uri for authentication link
+            Uri authUri = loginRequest.ToUri();
             // Open in default browser
-            Process.Start(new ProcessStartInfo(codeQueryUrl)
+            Process.Start(new ProcessStartInfo(authUri.ToString())
             {
                 UseShellExecute = true
             }); ;
 
             // Wait to receive code
             string? authCode = null;
-            while (string.IsNullOrEmpty(authCode)) {
-                Task<string> authCodeTask = GetCode(listener);
-                authCode = authCodeTask.Result;
+            while (string.IsNullOrEmpty(authCode))
+            {
+                authCode = GetCode();
             }
 
-            // Create payload for getting the access token
-               
-            Dictionary<string, string> content = new Dictionary<string, string>
-            {
-                { "grant_type", "authorization_code" },
-                { "client_id" , clientId },
-                {"code" , authCode},
-                {"redirect_uri" , redirectUri},
-                { "code_verifier" , codeVerifier }
-            };
+            // Request token
+            PKCETokenRequest tokenRequest = new PKCETokenRequest(clientId, authCode, new Uri(REDIRECT_URI_PATH + "callback"), verifier);
 
-            var parameters = new FormUrlEncodedContent(content);
-   
-
-            // jsonContent.Headers.Add("Content-Type", "application/x-www-form-urlencoded");
-
-            HttpResponseMessage response = spotifyClient.PostAsync("api/token/", parameters).Result;
-            string jsonString =  response.Content.ReadAsStringAsync().Result;
-            string[] kvs = jsonString
-                .Replace("{", "")
-                .Replace("}", "")
-                .Replace("\"", "")
-                .Split(',');
-            Dictionary<string, string> responseDict = new Dictionary<string, string>();
-            foreach(string kv in kvs)
-            {
-                string[] kv_pair = kv.Split(":");
-                responseDict[kv_pair[0]] = kv_pair[1];
-            }
-
-            Debug.WriteLine(responseDict["access_token"]);
-            this.AccessToken = responseDict["access_token"];
-            Debug.WriteLine("Complete!");
-
-
-
+            // Save AccessToken and RefreshToken
+            PKCETokenResponse tokenResponse = new OAuthClient().RequestToken(tokenRequest).Result;
+            this.Authenticator = new PKCEAuthenticator(clientId, tokenResponse);
+            this.AccessToken = tokenResponse.AccessToken;
+            this.RefreshToken = tokenResponse.RefreshToken;
+            this.Client = new SpotifyClient(this.AccessToken);
+            clientDidStart = true;
         }
-
         catch (Exception e)
         {
             Debug.WriteLine(e);
             Debug.WriteLine("Failed to initialize Spotify Manager, quitting...");
-            
             return;
         }
     }
+
+
+    public HashSet<SpotifyAPI.Web.Image> GetAlbumCoversOfTopSongs()
+    {
+        // Raise Exception if the client has not been initialized properly
+        if (!clientDidStart)
+        {
+            throw ClientNotInitializedException;
+        }
+
+        HashSet<SpotifyAPI.Web.Image> images = new HashSet<SpotifyAPI.Web.Image>();
+
+        var request = Client.UserProfile.GetTopTracks(new UsersTopItemsRequest(new TimeRange()));
+        UsersTopTracksResponse topTracksResponse = request.Result;
+        foreach (FullTrack track in topTracksResponse.Items)
+        {
+            SpotifyAPI.Web.Image albumCover = track.Album.Images[0];
+            images.Add(albumCover);
+        }
+        return images;
+
+    }
+
+
+    /// <summary>
+    /// Gets the album covers for all the unique albums in your library.
+    /// </summary>
+    //public void GetAlbumCovers()
+    //{
+
+    //    // Throw error if client was not initialized properly.
+    //    if (!clientDidStart)
+    //    {
+    //        throw ClientNotInitializedException;
+    //    }
+
+    //    // Get album data
+    //    var albumResponse = SpotifyClient.GetAsync($"v1/me/playlists").Result;
+
+    //    // Handle Error codes
+    //    if (!albumResponse.IsSuccessStatusCode)
+    //    {
+    //        throw new Exception(albumResponse.Content.ReadAsStringAsync().Result);
+    //    }
+
+    //    // Get playlist data response
+    //    JObject responseJson = JObject.Parse(albumResponse.Content.ReadAsStringAsync().Result);
+    //    var playlistData = (JArray)responseJson["items"];
+
+    //    // Store tracks in a list
+    //    var albumCovers = new HashSet<string>();
+
+    //    foreach (JObject album in playlistData)
+    //    {
+    //        // Get album cover for each track
+    //        var tracks = (JObject)album["tracks"];
+
+    //        var tracksUrl = (string)tracks["href"];
+
+    //        var trackDataResponse = SpotifyClient.GetAsync(tracksUrl).Result;
+
+
+    //        var tracksDataJson = JObject.Parse(trackDataResponse.Content.ReadAsStringAsync().Result);
+
+    //        Debug.WriteLine(trackDataResponse.Content.ReadAsStringAsync().Result);
+    //        var tracksData = (JArray)tracksDataJson["items"];
+
+    //        foreach (JObject item in tracksData)
+    //        {
+    //            var trackData = (JObject)item["track"];
+    //            var images = (JObject)trackData["images"];
+
+    //        }
+
+
+
+
+
+
+
+    //        //for ()
+    //        //playlistTracks.Add(tracks);
+    //    }
+
+    //}
 }
