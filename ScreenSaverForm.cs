@@ -20,8 +20,9 @@ public partial class ScreenSaverForm : Form
         int SIDE_LENGTH = Bounds.Size.Width / COLS;
 
         // Get client Id
-        string clientId = ConfigurationManager.AppSettings.Get("SPOTIFY_CLIENT_ID");
-        SpotifyManager spotify = new SpotifyManager(clientId ?? "");
+        string? clientId = ConfigurationManager.AppSettings.Get("SPOTIFY_CLIENT_ID");
+        string? clientSecret = ConfigurationManager.AppSettings.Get("SPOTIFY_CLIENT_SECRET");
+        SpotifyManager spotify = new SpotifyManager(clientId ?? "", clientSecret ?? "");
 
         // Get top songs
         SpotifyAPI.Web.Image[] imagesArray = spotify.GetAlbumCoversOfTopSongs().ToArray();

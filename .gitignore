@@ -13,8 +13,8 @@
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 
-# config
-*.config
+# App.config
+App.config
 
 # Mono auto generated files
 mono_crash.*
@@ -367,5 +367,4 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
-/App.config
 /App.config
